@@ -1,0 +1,100 @@
+# syntax=docker/dockerfile:1.7-labs
+# Production image for hosted deployment (e.g. SciLifeLab Serve).
+#
+# Differs from docker/Dockerfile (the dev image) in three ways that the host
+# requires, and one that makes republishing cheap:
+#
+#   1. Runs as a NON-ROOT user with uid 1000.
+#   2. Uses a startup script at the working directory. SciLifeLab Serve requires
+#      it to be named exactly start-script.sh and invoked via ENTRYPOINT; naming
+#      it start.sh with CMD produced './start-script.sh: not found' on their host.
+#   3. The dataset is COPIED IN, not bind-mounted. A hosted container has no access
+#      to your laptop, and the host's 100 MB upload limit rules out putting ~2.8 GB
+#      into its persistent storage.
+#   4. Layers are ordered deps -> data -> code, so a code-only fix republishes ~12 MB
+#      instead of re-uploading the whole data layer.
+#
+# Deliberately single-stage. A multi-stage build would drop build-essential
+# (~290 MB), but that is under 10% of an image dominated by ~2.8 GB of results, and
+# copying site-packages between stages risks missing shared libraries that pysam and
+# the cffi extension need at runtime. Not worth the fragility for 10%.
+#
+# Build (from the repo root -- note the explicit -f, and that BuildKit picks up
+# docker/Dockerfile.serve.dockerignore automatically):
+#
+#   docker build --platform linux/amd64 -f docker/Dockerfile.serve \
+#       -t <dockerhub-user>/dog-compulsive-disorder-pheweb:v1.0 .
+#
+# See docs/scilifelab-serve-deployment.md.
+
+# Which dataset to bake in. One Dockerfile serves every dataset:
+#   docker build -f docker/Dockerfile.serve --build-arg DATASET=cat_xyz_pheweb \
+#       -t <user>/cat-xyz-pheweb:v1.0 .
+ARG DATASET=dog_compulsive_disorder_pheweb
+
+FROM --platform=linux/amd64 python:3.8-slim-bullseye
+
+# Pinned Debian snapshot: the live bullseye archive serves an index whose pool
+# 404s (see docker/Dockerfile for the full explanation).
+RUN printf '%s\n' \
+      'deb http://snapshot.debian.org/archive/debian/20250601T000000Z bullseye main' \
+      'deb http://snapshot.debian.org/archive/debian-security/20250601T000000Z bullseye-security main' \
+      'deb http://snapshot.debian.org/archive/debian/20250601T000000Z bullseye-updates main' \
+      > /etc/apt/sources.list \
+    && echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99snapshot \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        build-essential zlib1g-dev perl gzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# setup.py is a legacy setup_requires/cffi_modules build; newer setuptools refuses it.
+RUN pip install --no-cache-dir 'setuptools<60' 'wheel<0.38' 'cffi~=1.15' \
+        'pytest-runner~=5.2' 'pytest~=6.2'
+
+COPY docker/requirements-py38.txt /tmp/requirements-py38.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-py38.txt
+
+# ---- data layer: ~3 GB, changes only when the dataset is reprocessed ----------
+# Everything not needed to *serve* is excluded by
+# docker/Dockerfile.serve.dockerignore: the load inputs (data/), the parsed/
+# intermediates, the sites/*.tsv intermediates, and the reference FASTA.
+#
+# Only the genuinely large and stable things go here. The small config files that
+# get edited often (config.py, pheno-list.json, the About page) are copied in a
+# LATER layer -- otherwise changing one sentence of prose invalidates this layer
+# and forces a 3 GB re-upload.
+ARG DATASET
+COPY --chown=1000:1000 \
+     --exclude=config.py --exclude=pheno-list.json --exclude=custom_templates \
+     ${DATASET} /data
+ENV PHEWEB_DATADIR=/data
+
+# ---- code layer: small, changes often ----------------------------------------
+# Explicit paths, NOT `COPY . /app`: the context still contains
+# dog_compulsive_disorder_pheweb/, and copying it again here duplicated ~3 GB of
+# results into a second layer (the image went 3.9 -> 8.9 GB before this was fixed).
+WORKDIR /app
+COPY setup.py setup.cfg MANIFEST.in LICENSE README.md /app/
+COPY pheweb /app/pheweb
+COPY docker/start-script.sh /app/start-script.sh
+RUN pip install --no-cache-dir --no-deps -e . \
+    && chmod +x /app/start-script.sh \
+    && chown -R 1000:1000 /app
+
+# ---- config layer: kilobytes, changes most often ------------------------------
+# Deliberately last. Editing the About page, the significance threshold or the
+# phenotype list republishes only this layer, so a prose fix costs a few KB of
+# upload instead of re-sending 3 GB of results.
+ARG DATASET
+COPY --chown=1000:1000 ${DATASET}/config.py ${DATASET}/pheno-list.json /data/
+COPY --chown=1000:1000 ${DATASET}/custom_templates /data/custom_templates
+
+# The host requires a non-root user with uid 1000.
+USER 1000
+
+# Must be within 3000-9999 for SciLifeLab Serve; start-script.sh enforces that.
+ENV PORT=8000
+EXPOSE 8000
+
+# Startup script at the working directory, as the host requires.
+# ENTRYPOINT, not CMD: SciLifeLab Serve expects to launch ./start-script.sh itself.
+ENTRYPOINT ["./start-script.sh"]

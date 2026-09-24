@@ -1,0 +1,31 @@
+# Pinned runtime deps for a working local PheWeb env (Python 3.8, linux/amd64).
+#
+# These are setup.py's `install_requires` pins, plus the Flask-1.1-era
+# transitive pins that setup.py leaves open. Modern Werkzeug/Jinja2/itsdangerous
+# /click break Flask 1.1 at import time, so they must be held back too (setup.py
+# only pins markupsafe, for the same reason).
+
+# --- from setup.py install_requires ---
+Flask~=1.1
+Flask-Compress~=1.8
+Flask-Login~=0.5
+rauth~=0.7
+pysam~=0.16
+intervaltree~=3.1
+tqdm~=4.56
+scipy~=1.5
+numpy~=1.19
+requests[security]~=2.25
+gunicorn~=20.0.4
+boltons~=20.2
+cffi~=1.15
+wget~=3.2
+gevent~=21.1
+psutil~=5.8
+markupsafe==2.0.1
+
+# --- Flask 1.1 ecosystem, pinned here rather than in setup.py ---
+Werkzeug~=1.0
+Jinja2~=2.11
+itsdangerous~=1.1
+click~=7.1

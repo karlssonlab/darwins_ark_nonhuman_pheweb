@@ -1,0 +1,53 @@
+# Build context for the PRODUCTION image. BuildKit picks this up automatically
+# because it is named <dockerfile-path>.dockerignore.
+#
+# Unlike the dev .dockerignore, this one deliberately LETS THE RESULTS THROUGH --
+# a hosted container has no bind mount, so generated-by-pheweb/ must be baked in.
+# What it excludes is everything the *server* never opens.
+#
+# Note the `**/` prefixes: without them a pattern matches only at the context
+# root, which is the bug that made the dev image 32 GB.
+
+# --- never ---------------------------------------------------------------------
+.git
+.venv
+pheweb_env/
+.pytest_cache
+**/__pycache__
+**/.DS_Store
+slurm_outs/
+
+# --- load inputs: needed to BUILD the results, not to serve them ---------------
+# ~7 GB of normalized .norm.csv.gz plus the raw .txt sumstats.
+**/data/
+**/*.mlma
+
+# --- load-time intermediates inside generated-by-pheweb/ -----------------------
+**/generated-by-pheweb/parsed/
+**/generated-by-pheweb/tmp/
+**/generated-by-pheweb/sites/sites.tsv
+**/generated-by-pheweb/sites/sites-rsids.tsv
+**/generated-by-pheweb/sites/sites-unannotated.tsv
+# (sites/cpras-rsids.sqlite3 IS kept -- it backs variant autocomplete)
+
+# --- reference genome: only normalize_sumstats.py needs it, and that runs before
+#     the image is built ---------------------------------------------------------
+**/*.fa
+**/*.fai
+
+# --- superseded / backup files -------------------------------------------------
+**/*.bak
+**/*.bak2
+**/*.round3-5e8
+**/pheno-list.json.bak*
+**/UU_CFAM_GSD_1.0_rosy.refseq.ensformat.bed
+**/UU_Cfam_GSD_1.0_ROSY.refSeq.ensformat.genes.validchr.bed
+
+# --- other datasets: this image serves one -------------------------------------
+example_cat_datadir/
+example_dog_datadir/
+
+# --- docs and dev tooling: not needed at runtime -------------------------------
+docs/
+*.md
+!README.md
