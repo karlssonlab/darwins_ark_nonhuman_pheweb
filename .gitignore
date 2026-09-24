@@ -19,3 +19,26 @@ dist
 pheweb/load/cffi/_x*
 .eggs
 .venv
+
+# --- added 2026-09-21 -------------------------------------------------------
+# Raw summary statistics. *.csv and *.gz were already ignored, but the raw
+# ITEM/CCDF files are .txt and were slipping through -- `git add -A` would have
+# staged 2.2 GB, which GitHub rejects at 100 MB/file. These belong in a data
+# archive with a DOI, not in git; normalize_sumstats.py regenerates the
+# .norm.csv.gz inputs from them.
+**/data/*_sumstats.txt
+**/data/*.txt
+Unique.cf4genes2*.txt
+
+# Index files alongside ignored .gz
+**/*.tbi
+
+# Editor/OS and backup litter
+.DS_Store
+**/.DS_Store
+.Rhistory
+**/.Rhistory
+*.bak
+*.bak[0-9]
+*.orig
+pheno-list.json.bak*
