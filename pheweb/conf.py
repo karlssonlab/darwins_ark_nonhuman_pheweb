@@ -131,6 +131,62 @@ def get_grch_build_number() -> int:
     hg = get_hg_build_number()
     return hg if hg >= 38 else 18 + hg
 
+## Species config
+def get_species() -> str:
+    '''Which species this data dir serves. `PHEWEB_SPECIES` env var overrides the
+    `species` config key; default is the backward-compatible 'dog'.'''
+    from . import species as _species
+    if 'PHEWEB_SPECIES' in os.environ:
+        ret = os.environ['PHEWEB_SPECIES']
+    else:
+        ret = _get_config_str('species', _species.DEFAULT_SPECIES)
+    if ret not in _species.SPECIES:
+        raise PheWebError("species must be one of {}, not {!r}".format(_species.known_species(), ret))
+    return ret
+def get_species_profile() -> Dict[str,Any]:
+    '''The active species profile (see pheweb/species.py). `genes_bed`,
+    `ref_fasta_pattern` and `recomb_map` may be overridden per data dir by
+    config.py keys.'''
+    from . import species as _species
+    profile = _species.get_profile(get_species())
+    override_bed = _get_config_optional_str('genes_bed')
+    if override_bed is not None: profile['genes_bed'] = override_bed
+    override_fasta = _get_config_optional_str('ref_fasta_pattern')
+    if override_fasta is not None: profile['ref_fasta_pattern'] = override_fasta
+    override_recomb = _get_config_optional_str('recomb_map')
+    if override_recomb is not None: profile['recomb_map'] = override_recomb
+    # Branding is a property of the *study*, not the species: several dog datasets
+    # can be served from one codebase and should not all announce themselves as the
+    # same site. The species profile supplies a sane default; a data dir overrides.
+    override_title = _get_config_optional_str('site_title')
+    if override_title is not None: profile['site_title'] = override_title
+    override_display = _get_config_optional_str('display_name')
+    if override_display is not None: profile['display_name'] = override_display
+    return profile
+
+def get_recomb_map_filepath() -> Optional[str]:
+    '''Absolute path of the local recombination map, or None if this data dir has
+    none (no `recomb_map` in the species profile, or the file is missing).
+
+    The existence check is what the region view keys the recombination track on, so
+    a profile naming a map that was never built simply hides the track instead of
+    serving 404s to LocusZoom.
+
+    A `recomb_map` that is an absolute path (or starts with `~`) is used as-is, so
+    several data dirs on the same machine can share one copy of what is really an
+    assembly-level annotation; a bare filename resolves inside the data dir.'''
+    filename = get_species_profile().get('recomb_map')
+    if not filename: return None
+    if filename.startswith('~') or os.path.isabs(filename):
+        filepath = os.path.abspath(os.path.expanduser(filename))
+    else:
+        filepath = os.path.join(get_data_dir(), filename)
+    # The .tbi is as essential as the map itself -- without it pysam can't do a
+    # region query, so treat a missing index as "no map" rather than failing later.
+    if not os.path.exists(filepath) or not os.path.exists(filepath + '.tbi'):
+        return None
+    return filepath
+
 def get_num_procs(cmd:Optional[str] = None) -> int:
     import multiprocessing
     key = 'num_procs'
@@ -158,7 +214,35 @@ def get_manhattan_num_unbinned() -> int: return _get_config_int('manhattan_num_u
 def get_manhattan_peak_max_count() -> int: return _get_config_int('manhattan_peak_max_count', 500)
 def get_manhattan_peak_pval_threshold() -> float: return _get_config_float('manhattan_peak_pval_threshold', 1e-6)
 def get_manhattan_peak_sprawl_dist() -> int: return _get_config_int('manhattan_peak_sprawl_dist', 200_000)
-def get_manhattan_peak_variant_counting_pval_threshold() -> float: return _get_config_float('manhattan_peak_variant_counting_pval_threshold', 5e-8)
+def get_significance_threshold() -> float:
+    '''The genome-wide significance p-value for this data dir.
+
+    Default 5e-8, the human GWAS convention, which is not right for every study:
+    it assumes a particular number of independent tests. A dog study on a smaller,
+    more structured genome may justify a different threshold, so this is per-data-
+    dir (`significance_threshold` in config.py).
+
+    Drives the Manhattan significance line and its tooltip, which peaks get gene
+    labels, the region view's significance line, and (unless separately overridden)
+    `manhattan_peak_variant_counting_pval_threshold`.'''
+    ret = _get_config_float('significance_threshold', 5e-8)
+    if not 0 < ret < 1:
+        raise PheWebError("significance_threshold must be between 0 and 1, not {!r}".format(ret))
+    peak_threshold = get_manhattan_peak_pval_threshold()
+    if ret >= peak_threshold:
+        # manhattan.py asserts this; catch it here with an explanation, because
+        # the assert fires deep inside a load step with no message.
+        raise PheWebError(
+            "significance_threshold ({!r}) must be stricter (smaller) than "
+            "manhattan_peak_pval_threshold ({!r}); peaks have to be detected before "
+            "their significant variants can be counted. Lower significance_threshold, "
+            "or raise manhattan_peak_pval_threshold.".format(ret, peak_threshold))
+    return ret
+def get_manhattan_peak_variant_counting_pval_threshold() -> float:
+    '''Variants stronger than this are counted into `num_significant_in_peak`.
+    Defaults to the data dir's significance threshold so one knob moves both;
+    override separately only if you need them to differ.'''
+    return _get_config_float('manhattan_peak_variant_counting_pval_threshold', get_significance_threshold())
 def get_top_hits_pval_cutoff() -> float: return _get_config_float('top_hits_pval_cutoff', 1e-6)
 
 

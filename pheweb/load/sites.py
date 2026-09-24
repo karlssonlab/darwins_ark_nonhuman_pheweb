@@ -1,5 +1,5 @@
 
-from ..utils import chrom_order, get_phenolist, PheWebError
+from ..utils import get_chrom_order, get_phenolist, PheWebError
 from .. import conf
 from ..file_utils import VariantFileReader, VariantFileWriter, get_filepath, get_pheno_filepath, make_basedir, get_dated_tmp_path, get_tmp_path
 from .load_utils import get_maf, mtime, indent, ProgressBar
@@ -238,4 +238,4 @@ class VariantListMerger:
 
     @staticmethod
     def _key_from_variant(v):
-        return (chrom_order[v['chrom']], v['pos'], v['ref'], v['alt'])
+        return (get_chrom_order()[v['chrom']], v['pos'], v['ref'], v['alt'])

@@ -1,5 +1,6 @@
 
 from ..utils import get_phenolist
+from .. import conf
 from ..file_utils import write_json, get_filepath, get_pheno_filepath, write_heterogenous_variantfile
 
 import json
@@ -14,7 +15,9 @@ def get_phenotypes_including_top_variants() -> Iterator[Dict[str,Any]]:
         with open(get_pheno_filepath('manhattan', pheno['phenocode'])) as f:
             variants = json.load(f)['unbinned_variants']
         top_variant = min(variants, key=lambda v: v['pval'])
-        num_peaks = sum(variant.get('peak',False) and variant['pval']<=5e-8 for variant in variants)
+        # Counted at the data dir's significance threshold, not a hardcoded 5e-8, so
+        # the phenotypes table's locus count agrees with the Manhattan line.
+        num_peaks = sum(variant.get('peak',False) and variant['pval']<=conf.get_significance_threshold() for variant in variants)
         ret = {
             'phenocode': pheno['phenocode'],
             'pval': top_variant['pval'],

@@ -263,6 +263,9 @@ $(function() {
 
 
 // Check Clinvar and render link.
+// ClinVar only has human (GRCh) coordinates, so skip it for non-human assemblies
+// (dog/cat) where the query is meaningless and would only add a broken link.
+if (window.model.species === 'human') {
 (function() {
     var clinvar_api_template = _.template('https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=clinvar&term=<%= chrom %>[Chromosome]%20AND%20<%= pos %>[Base%20Position%20for%20Assembly%20GRCh'+window.model.grch_build_number+']&retmode=json');
     var clinvar_api_url = clinvar_api_template(window.variant);
@@ -277,6 +280,7 @@ $(function() {
         }
     });
 })();
+}
 
 
 // Check PubMed for each rsid and render link.

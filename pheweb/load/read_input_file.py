@@ -1,5 +1,5 @@
 
-from ..utils import chrom_order, chrom_order_list, chrom_aliases, PheWebError
+from ..utils import get_chrom_order, get_chrom_order_list, get_chrom_aliases, PheWebError
 from .. import parse_utils
 from .. import conf
 from ..file_utils import read_maybe_gzip
@@ -42,6 +42,7 @@ class PhenoReader:
         # Also assert that chrom and pos are in order
         cp_groups = itertools.groupby(variants, key=lambda v:(v['chrom'], v['pos']))
         prev_chrom_index, prev_pos = -1, -1
+        chrom_order_list = get_chrom_order_list()
         for cp, tied_variants in cp_groups:
             chrom_index = self._get_chrom_index(cp[0])
             if chrom_index < prev_chrom_index:
@@ -80,7 +81,7 @@ class PhenoReader:
     @staticmethod
     def _get_chrom_index(chrom):
         try:
-            return chrom_order[chrom]
+            return get_chrom_order()[chrom]
         except KeyError:
             raise PheWebError(
                 "It looks like one of your variants has the chromosome {!r}, but PheWeb doesn't handle that chromosome.\n".format(chrom) +
@@ -151,6 +152,7 @@ class AssocFileReader:
                         assert variant['chrom'] == chrom2, (values, variant, chrom2)
                         assert variant['pos'] == pos2, (values, variant, pos2)
 
+                    chrom_aliases = get_chrom_aliases()
                     if variant['chrom'] in chrom_aliases:
                         variant['chrom'] = chrom_aliases[variant['chrom']]
 

@@ -1,1 +1,12 @@
-{{ pheno['phenocode'] }}{% if pheno.phenostring %}: {{ pheno.phenostring }}{% endif %}
+{# Show the phenostring alone, falling back to the phenocode when there is none.
+
+   Upstream prepended the phenocode ("{{ phenocode }}: {{ phenostring }}"), which
+   double-prints it whenever a phenostring already carries its own identifier --
+   e.g. phenocode "item145" with phenostring "item145: False digging" rendered as
+   "item145: item145: False digging".
+
+   This also matches what every other template already does
+   (phenotypes.html, top_hits.html, gene.html, variant.html all use
+   `phenostring || phenocode`), so the headings are no longer the odd ones out.
+   The phenocode remains visible in the URL. #}
+{{ pheno.phenostring or pheno['phenocode'] }}

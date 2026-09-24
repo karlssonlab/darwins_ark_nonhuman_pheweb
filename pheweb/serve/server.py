@@ -37,6 +37,21 @@ if conf.get_sentry_id() and not os.environ.get('PHEWEB_NO_SENTRY',''):
     app.config['SENTRY_DSN'] = conf.get_sentry_id()
 app.config['HG_BUILD_NUMBER'] = conf.get_hg_build_number()
 app.config['GRCH_BUILD_NUMBER'] = conf.get_grch_build_number()
+# Species profile: branding + external-link config (see pheweb/species.py)
+_species_profile = conf.get_species_profile()
+app.config['SPECIES'] = conf.get_species()
+app.config['SPECIES_SITE_TITLE'] = _species_profile['site_title']
+app.config['SPECIES_DISPLAY_NAME'] = _species_profile['display_name']
+app.config['SPECIES_ASSEMBLY_LABEL'] = _species_profile['assembly_label']
+app.config['SPECIES_UCSC_DB'] = _species_profile['ucsc_db']
+# Drives whether the region view draws a recombination track at all. There is no
+# remote fallback on purpose: the old default hit a *human* GRCh37 map, which
+# returned a plausible-looking curve with no relationship to the dog or cat locus
+# on screen. Absent a species-appropriate map, the track is omitted entirely.
+app.config['HAS_RECOMB_MAP'] = conf.get_recomb_map_filepath() is not None
+# Genome-wide significance line. Per data dir, because 5e-8 is a human convention
+# rather than a universal constant (see conf.get_significance_threshold).
+app.config['SIGNIFICANCE_THRESHOLD'] = conf.get_significance_threshold()
 app.config['PHEWEB_VERSION'] = pheweb_version
 app.config['LZJS_VERSION'] = conf.get_lzjs_version()
 app.config['URLPREFIX'] = conf.get_urlprefix()
@@ -122,8 +137,13 @@ def variant_page(query:str):
         variant = get_variant(query)
         if variant is None:
             die("Sorry, I couldn't find the variant {}".format(query))
+        # UCSC displays some assemblies (e.g. the cat GenArk hub) with cytogenetic
+        # chromosome names while our data is numeric, so map numeric->UCSC name
+        # server-side. Chroms absent from the map fall through to chr{chrom}.
+        ucsc_chrom = _species_profile['ucsc_chrom_map'].get(str(variant['chrom']), str(variant['chrom']))
         return render_template('variant.html',
                                variant=variant,
+                               ucsc_chrom=ucsc_chrom,
                                tooltip_lztemplate=parse_utils.tooltip_lztemplate,
         )
     except Exception as exc:
@@ -280,6 +300,83 @@ def api_region(phenocode:str):
         return jsonify(get_pheno_region(phenocode, chrom, pos_start, pos_end))
 
 
+@bp.route('/api/region/lz-recomb/')
+@check_auth
+def api_recomb():
+    '''Local recombination-rate track, shaped like the portaldev RecombLZ API so
+    LocusZoom's stock `recomb_rate` data layer can read it unchanged.
+
+    Not per-phenotype -- the map is a property of the assembly -- but it lives
+    under /api/region/ to sit beside lz-results/ and share its filter syntax.'''
+    filepath = conf.get_recomb_map_filepath()
+    if filepath is None:
+        # No local map for this species: LocusZoom shouldn't have been pointed
+        # here at all (region.js only does so when the map exists), so this is a
+        # misconfiguration rather than an empty region.
+        return jsonify({'error': 'This PheWeb instance has no local recombination map.'}), 400
+
+    filter_param = request.args.get('filter')
+    if not isinstance(filter_param, str): abort(404)
+    m = re.match(r".*chromosome in +'(.+?)' and position ge ([0-9]+) and position le ([0-9]+)", filter_param)
+    if not m: abort(404)
+    chrom, pos_start, pos_end = m.group(1), int(m.group(2)), int(m.group(3))
+
+    rows = _get_recomb_region(filepath, chrom, pos_start, pos_end)
+    return jsonify({'data': {
+        'chromosome': [chrom] * len(rows),
+        'position': [r[0] for r in rows],
+        'recomb_rate': [r[1] for r in rows],
+        'pos_cm': [r[2] for r in rows],
+    }, 'lastPage': None})
+
+
+# Cap on points returned for one region. The map is dense (~4k points/Mb on
+# canFam4), so a zoomed-out view would otherwise ship megabytes of JSON to draw a
+# line a few hundred pixels wide.
+RECOMB_MAX_POINTS = 2000
+
+def _get_recomb_region(filepath:str, chrom:str, pos_start:int, pos_end:int) -> List[Tuple[int,float,float]]:
+    '''Recombination map rows overlapping the region, thinned to RECOMB_MAX_POINTS.
+
+    Thinning keeps the highest-rate row in each of RECOMB_MAX_POINTS equal-width
+    bins rather than taking every Nth row: the rate is a step function with narrow
+    hotspots, and strided sampling drops them at random. Keeping the max is a
+    visible-hotspot-preserving summary -- it can overstate rate in a sparse bin,
+    so a peak's exact height at low zoom is indicative, not exact.'''
+    import pysam
+    with pysam.TabixFile(filepath, parser=None) as tabix_file:
+        if chrom not in tabix_file.contigs: return []
+        try:
+            # start-1 because tabix treats the query start as 0-based/half-open
+            # while our positions are 1-based (same convention as _ivfr above).
+            tabix_iter = tabix_file.fetch(chrom, pos_start-1, pos_end, parser=None)
+        except Exception as exc:
+            raise PheWebError('ERROR when fetching recomb {}:{}-{} from {}'.format(
+                chrom, pos_start, pos_end, filepath)) from exc
+        rows:List[Tuple[int,float,float]] = []
+        for line in tabix_iter:
+            fields = line.split('\t')
+            try:
+                rows.append((int(fields[1]), float(fields[2]), float(fields[3])))
+            except (IndexError, ValueError) as exc:
+                raise PheWebError('ERROR parsing recomb line {!r} from {}'.format(
+                    line, filepath)) from exc
+
+    if len(rows) <= RECOMB_MAX_POINTS: return rows
+    bin_width = (pos_end - pos_start + 1) / RECOMB_MAX_POINTS
+    best_by_bin:Dict[int,Tuple[int,float,float]] = {}
+    for row in rows:
+        bin_idx = int((row[0] - pos_start) / bin_width)
+        incumbent = best_by_bin.get(bin_idx)
+        if incumbent is None or row[1] > incumbent[1]:
+            best_by_bin[bin_idx] = row
+    # Endpoints matter for the line reaching the edges of the plot.
+    thinned = sorted(best_by_bin.values())
+    if thinned[0] != rows[0]: thinned.insert(0, rows[0])
+    if thinned[-1] != rows[-1]: thinned.append(rows[-1])
+    return thinned
+
+
 @bp.route('/api/pheno/<phenocode>/correlations/')
 @check_auth
 def api_pheno_correlations(phenocode:str):
@@ -428,7 +525,12 @@ else:
 
 @bp.route('/')
 def homepage():
-    return render_template('index.html')
+    # The landing page was a welcome banner, one sentence naming the dataset, and a
+    # link to the phenotypes table -- its search box has been commented out since the
+    # DAP fork. Everything it offered is one click away, so send visitors straight to
+    # the phenotypes browser instead of through a splash screen.
+    # (index.html and index/h1.html are kept, unused, in case it is ever wanted back.)
+    return relative_redirect(url_for('.phenotypes_page'))
 
 @bp.route('/about')
 def about_page():

@@ -1,5 +1,17 @@
 'use strict';
 
+// Recombination rates from this instance's own species-appropriate map, served by
+// /api/region/lz-recomb/ in the same object-of-arrays shape as the portaldev API.
+// Only getURL changes: no `build` param (the map is whatever assembly this data
+// dir uses) and no analysis id, since we serve exactly one map.
+LocusZoom.Adapters.extend("RecombLZ", "RecombPheWeb", {
+    getURL: function (state) {
+        return this.url + "?filter=chromosome in  '" + state.chr + "'" +
+            " and position ge " + state.start +
+            " and position le " + state.end;
+    }
+});
+
 LocusZoom.Adapters.extend("AssociationLZ", "AssociationPheWeb", {
     getURL: function (state, chain, fields) {
         return this.url + "results/?filter=chromosome in  '" + state.chr + "'" +
@@ -62,8 +74,16 @@ LocusZoom.TransformationFunctions.add("percent", function(x) {
         .add("ld", ["LDServer", { url: "https://portaldev.sph.umich.edu/ld/",
             params: { source: '1000G', build: 'GRCh'+window.model.grch_build_number, population: 'ALL' }
         }])
-        .add("gene", ["GeneLZ", { url: remoteBase + "annotation/genes/", params: {build: 'GRCh'+window.model.grch_build_number} }])
-        .add("recomb", ["RecombLZ", { url: remoteBase + "annotation/recomb/results/", params: {build:'GRCh'+window.model.grch_build_number} }]);
+        .add("gene", ["GeneLZ", { url: remoteBase + "annotation/genes/", params: {build: 'GRCh'+window.model.grch_build_number} }]);
+
+    // Recombination track: served from this instance's own map, or not at all.
+    // The remote portaldev source this replaced is a human GRCh37/38 map, which
+    // for a dog or cat region returns a curve for the same *coordinates* on the
+    // corresponding human chromosome -- convincing to look at and completely
+    // unrelated to the locus being plotted. Better to omit the track.
+    if (window.model.has_recomb_map) {
+        data_sources.add("recomb", ["RecombPheWeb", { url: window.model.urlprefix + "/api/region/lz-recomb/" }]);
+    }
 
     LocusZoom.TransformationFunctions.add("neglog10_or_323", function(x) {
         if (x === 0) return 323;
@@ -267,8 +287,19 @@ LocusZoom.TransformationFunctions.add("percent", function(x) {
                         ]
                     },
                     data_layers: [
-                        LocusZoom.Layouts.get("data_layer", "significance", { unnamespaced: true }),
-                        LocusZoom.Layouts.get("data_layer", "recomb_rate", { unnamespaced: true }),
+                        // LocusZoom's stock significance layer is hardcoded to
+                        // -log10(5e-8); offset it to this data dir's threshold so the
+                        // region view's line agrees with the Manhattan plot's.
+                        LocusZoom.Layouts.get("data_layer", "significance", {
+                            unnamespaced: true,
+                            offset: -Math.log10(get_significance_threshold()),
+                        }),
+                        // Dropped (and filtered out below) when this instance has no
+                        // recombination map, so the plot shows no track rather than a
+                        // human one. Requesting it without a registered "recomb" source
+                        // would leave LocusZoom waiting on data that never arrives.
+                        window.model.has_recomb_map ?
+                            LocusZoom.Layouts.get("data_layer", "recomb_rate", { unnamespaced: true }) : null,
                         function() {
                             var l = LocusZoom.Layouts.get("data_layer", "association_pvalues_catalog", {
                                 unnamespaced: true,
@@ -311,9 +342,13 @@ LocusZoom.TransformationFunctions.add("percent", function(x) {
                             }];
                             return l;
                         }()
-                    ],
+                    ].filter(Boolean),
                 });
                 base.legend.origin.y = 15;
+                // The stock association panel declares a y2 axis for the recombination
+                // rate. With no recomb layer that axis would render as a labelled but
+                // empty right-hand scale, so drop it too.
+                if (!window.model.has_recomb_map && base.axes) { delete base.axes.y2; }
                 return base;
             }(),
             //RB removing the gene position info

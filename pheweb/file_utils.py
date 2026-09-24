@@ -1,5 +1,5 @@
 
-from .utils import PheWebError, get_phenolist, chrom_order
+from .utils import PheWebError, get_phenolist, get_chrom_order
 from . import conf
 from . import parse_utils
 
@@ -41,9 +41,12 @@ _single_filepaths: Dict[str,Callable[[],str]] = {
     'rsids-hg19': (lambda: get_generated_path('resources/rsids-v{}-hg19.tsv.gz'.format(dbsnp_version))),
     'rsids-hg38': (lambda: get_generated_path('resources/rsids-v{}-hg38.tsv.gz'.format(dbsnp_version))),
     #'genes': (lambda: get_generated_path('resources/genes-v{}-hg{}.bed'.format(genes_version, conf.get_hg_build_number()))), #RB hardcoding dog BED
-    'genes': (lambda: 'UU_CFAM_GSD_1.0_rosy.refseq.ensformat.bed'),
+    # Gene BED is species-driven (see pheweb/species.py), resolved under the data
+    # dir root. Filename comes from the active profile's `genes_bed` (overridable
+    # per data dir with a `genes_bed = ...` config key).
+    'genes': (lambda: os.path.join(conf.get_data_dir(), conf.get_species_profile()['genes_bed'])),
     #'genes-hg19': (lambda: get_generated_path('resources/genes-v{}-hg19.bed'.format(genes_version))),
-    'genes-hg19': (lambda: 'UU_CFAM_GSD_1.0_rosy.refseq.ensformat.bed'),
+    'genes-hg19': (lambda: os.path.join(conf.get_data_dir(), conf.get_species_profile()['genes_bed'])),
     'genes-hg38': (lambda: get_generated_path('resources/genes-v{}-hg38.bed'.format(genes_version))),
     'gene-aliases-sqlite3': (lambda: get_generated_path('resources/gene_aliases-v{}.sqlite3'.format(genes_version))),
     # simple:
@@ -308,6 +311,7 @@ class _mr(_ivfr):
 
 
 def with_chrom_idx(variants:Iterator[Dict[str,Any]]) -> Iterator[Dict[str,Any]]:
+    chrom_order = get_chrom_order()
     for v in variants:
         v['chrom_idx'] = chrom_order[v['chrom']]
         yield v

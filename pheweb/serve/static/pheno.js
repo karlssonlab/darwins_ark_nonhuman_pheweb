@@ -133,10 +133,10 @@ function create_gwas_plot(variant_bins, unbinned_variants) {
             .attr("transform", fmt("translate({0},{1})", plot_margin.left, plot_margin.top));
 
         // Significance Threshold line
-        var significance_threshold = 5e-8;
+        var significance_threshold = get_significance_threshold();
         var significance_threshold_tooltip = d3.tip()
             .attr('class', 'd3-tip')
-            .html('Significance Threshold: 5E-8')
+            .html('Significance Threshold: ' + format_significance_threshold(significance_threshold))
             .offset([-8,0]);
         gwas_svg.call(significance_threshold_tooltip);
 
@@ -266,7 +266,7 @@ function create_gwas_plot(variant_bins, unbinned_variants) {
 
         // TODO: if the label touches any circles or labels, skip it?
         var variants_to_label = _.sortBy(_.where(unbinned_variants, {peak: true}), _.property('pval'))
-            .filter(function(d) { return d.pval < 5e-8; })
+            .filter(function(d) { return d.pval < significance_threshold; })
             .slice(0,7);
         var genenames = gwas_plot.append('g')
             .attr('class', 'genenames')

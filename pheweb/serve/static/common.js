@@ -66,3 +66,17 @@ function fmt(format) {
 }
 
 function two_digit_format(x) { return (x>=.1)? x.toFixed(2) : (x>=.01)? x.toFixed(3) : x.toExponential(1); }
+
+// The data dir's genome-wide significance threshold (`significance_threshold` in
+// config.py; 5e-8 by default). Falls back to 5e-8 so a page rendered by an older
+// server, or any template that doesn't include layout.html, still draws a line.
+function get_significance_threshold() {
+    return (window.model && window.model.significance_threshold) || 5e-8;
+}
+// "5E-8", "4E-7" -- matches how the tooltip has always read. Keeps a decimal
+// place only when rounding away would misstate the threshold (1.5e-7 -> "1.5E-7",
+// not "2E-7").
+function format_significance_threshold(x) {
+    var rounded = Number(x.toExponential(0));
+    return (rounded === x ? x.toExponential(0) : x.toExponential(1)).toUpperCase();
+}

@@ -15,6 +15,9 @@
   window.model.urlprefix = {{ config.URLPREFIX|tojson }};
   window.model.hg_build_number = {{ config.HG_BUILD_NUMBER }};
   window.model.grch_build_number = {{ config.GRCH_BUILD_NUMBER }};
+  window.model.species = {{ config.SPECIES|tojson }};
+  window.model.has_recomb_map = {{ config.HAS_RECOMB_MAP|tojson }};
+  window.model.significance_threshold = {{ config.SIGNIFICANCE_THRESHOLD|tojson }};
 </script>
 
 <link href="{{ url_for('.static', filename='common.css') }}" rel="stylesheet" type="text/css">
@@ -54,7 +57,7 @@
             </button>
             {% block navbar_left %}
             <!-- RB getting rid of landing page and top search bar
-            <a class="navbar-brand" href="{{ url_for('.homepage') }}" style="color: #333; font-weight: bold; float: left; font-size: 15px;">DAP-PheWeb</a>
+            <a class="navbar-brand" href="{{ url_for('.homepage') }}" style="color: #333; font-weight: bold; float: left; font-size: 15px;">{{ config.SPECIES_SITE_TITLE }}</a>
             <div class="navbar-left" id="navbar_form_container">
                 <form action="{{ url_for('.go') }}" class="navbar-form" role="search">
                     <div class="form-group" id="navbar-awesomebar">

@@ -2,6 +2,7 @@
 from flask import url_for, Response, redirect
 
 from ..file_utils import MatrixReader, IndexedVariantFileReader, get_filepath
+from .. import conf
 
 import random
 import re
@@ -86,7 +87,9 @@ def get_random_page() -> Optional[str]:
         hits = json.load(f)
     if not hits:
         return None
-    hits_to_choose_from = [hit for hit in hits if hit['pval'] < 5e-8]
+    # /random should land on something worth looking at, judged by this data dir's
+    # threshold rather than the human 5e-8 convention.
+    hits_to_choose_from = [hit for hit in hits if hit['pval'] < conf.get_significance_threshold()]
     if len(hits_to_choose_from) < 10:
         hits_to_choose_from = hits[:10]
     hit = random.choice(hits_to_choose_from)

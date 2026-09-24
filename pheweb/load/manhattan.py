@@ -12,7 +12,7 @@ This script creates json files which can be used to render Manhattan plots.
 
 # TODO: keep 10 variants unbinned from each chrom
 
-from ..utils import chrom_order
+from ..utils import get_chrom_order
 from .. import conf
 from ..file_utils import VariantFileReader, write_json, get_pheno_filepath
 from .load_utils import MaxPriorityQueue, parallelize_per_pheno, get_phenos_subset, get_phenolist
@@ -117,7 +117,7 @@ class Binner:
                                                     size=conf.get_manhattan_num_unbinned(),
                                                     popped_callback=self._bin_variant)
     def _bin_variant(self, variant:Variant) -> None:
-        chrom_idx = chrom_order[variant['chrom']]
+        chrom_idx = get_chrom_order()[variant['chrom']]
         if chrom_idx not in self._bins: self._bins[chrom_idx] = {}
         pos_bin_id = variant['pos'] // BIN_LENGTH
         if pos_bin_id not in self._bins[chrom_idx]:

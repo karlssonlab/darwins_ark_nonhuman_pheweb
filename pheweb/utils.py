@@ -1,5 +1,6 @@
 
 import math, importlib.util
+import functools
 import json
 import os
 import csv
@@ -83,23 +84,27 @@ assert pad_gene(200000, 700000) == (200000, 700000), pad_gene(200000, 700000)
 assert pad_gene(200000, 800000) == (200000, 800000), pad_gene(200000, 800000)
 
 
-#chrom_order_list = [str(i) for i in range(1,22+1)] + ['X', 'Y', 'MT'] #RB hardcoding dog chrs
-chrom_order_list = [
-    1,2,3,4,5,6,7,8,9,10,
-    11,12,13,14,15,16,17,18,19,20,
-    21,22,23,24,25,26,27,28,29,30,
-    31,32,33,34,35,36,37,38,39,
-]
-chrom_order_list = [str(c) for c in chrom_order_list]
-chrom_order = {chrom: index for index,chrom in enumerate(chrom_order_list)}
-#chrom_aliases = {'23': 'X', '24': 'Y', '25': 'MT', 'M': 'MT'}
-#for chrom in chrom_order_list: chrom_aliases['chr{}'.format(chrom)] = chrom
-#for alias, chrom in list(chrom_aliases.items()): chrom_aliases['chr{}'.format(alias)] = chrom
-chrom_aliases = {}
+# The chromosome set used to be a dog-hardcoded module-level constant (upstream
+# PheWeb hardcoded the human set: [str(i) for i in range(1,22+1)] + ['X','Y','MT']).
+# It's now species-driven via the active profile.  These accessors are lazy
+# (`@lru_cache`) rather than module-level constants because config only loads in
+# main() *after* these modules are imported (see command_line.py).
+@functools.lru_cache(None)
+def get_chrom_order_list() -> ty.List[str]:
+    from . import conf
+    return conf.get_species_profile()['chrom_order_list']
+@functools.lru_cache(None)
+def get_chrom_order() -> ty.Dict[str,int]:
+    return {chrom: index for index, chrom in enumerate(get_chrom_order_list())}
+@functools.lru_cache(None)
+def get_chrom_aliases() -> ty.Dict[str,str]:
+    from . import conf
+    return conf.get_species_profile()['chrom_aliases']
 
 
 def get_gene_tuples_with_ensg() -> ty.Iterator[ty.Tuple[str,int,int,str,str]]:
     from .file_utils import get_filepath
+    chrom_order = get_chrom_order()
     with open(get_filepath('genes')) as f:
         for row in csv.reader(f, delimiter='\t'):
             assert row[0] in chrom_order, row[0]

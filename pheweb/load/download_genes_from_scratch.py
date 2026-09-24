@@ -1,5 +1,5 @@
 
-from ..utils import chrom_order, chrom_aliases, PheWebError
+from ..utils import get_chrom_order, get_chrom_aliases, PheWebError
 from ..file_utils import get_tmp_path, make_basedir, genes_version, get_filepath, read_gzip
 from .. import conf
 
@@ -70,8 +70,9 @@ def get_all_genes(gencode_filepath:str) -> Iterator[Dict[str,Any]]:
                     if r[0].startswith('GL'): continue
                     else: raise PheWebError('Unknown chromosome in gencode: {}'.format(repr(r[0])))
                 chrom = r[0][3:]
+                chrom_aliases = get_chrom_aliases()
                 if chrom in chrom_aliases: chrom = chrom_aliases[chrom]
-                elif chrom not in chrom_order: continue
+                elif chrom not in get_chrom_order(): continue
                 pos1, pos2 = int(r[3]), int(r[4])
                 assert pos1 < pos2
                 full_ensg = re_search(r'gene_id "(ENSGR?[0-9\._A-Z]+?)"', r[8]).group(1)

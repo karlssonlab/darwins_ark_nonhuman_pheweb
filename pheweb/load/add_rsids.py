@@ -19,7 +19,7 @@ We read one full position at a time.  When we have a position-match, we find all
 # TODO: rename `cpra` to something else to reflect that it can also contain other per-variant fields
 
 
-from ..utils import chrom_order, chrom_order_list, chrom_aliases, PheWebError
+from ..utils import get_chrom_order, get_chrom_order_list, get_chrom_aliases, PheWebError
 from ..file_utils import VariantFileReader, VariantFileWriter, get_filepath, read_maybe_gzip
 from .. import conf
 from .load_utils import mtime
@@ -32,6 +32,9 @@ from typing import Iterator,Dict,Any,List
 def get_rsid_reader(rsids_f:Iterator[str], rsids_filepath:str) -> Iterator[Dict[str,Any]]:
     prev_chrom_idx = -1
     prev_pos = -1
+    chrom_order = get_chrom_order()
+    chrom_order_list = get_chrom_order_list()
+    chrom_aliases = get_chrom_aliases()
     for line in rsids_f:
         if not line.startswith('##'):
             if line.startswith('#'):
@@ -135,7 +138,7 @@ def run(argv:List[str]) -> None:
                 if rsid_group[0]['chrom'] == cp_group[0]['chrom']:
                     rsid_is_not_behind = rsid_group[0]['pos'] >= cp_group[0]['pos']
                 else:
-                    rsid_is_not_behind = chrom_order[rsid_group[0]['chrom']] >= chrom_order[cp_group[0]['chrom']]
+                    rsid_is_not_behind = get_chrom_order()[rsid_group[0]['chrom']] >= get_chrom_order()[cp_group[0]['chrom']]
                 if rsid_is_not_behind:
                     break
                 else:

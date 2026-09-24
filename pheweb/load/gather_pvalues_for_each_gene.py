@@ -7,6 +7,7 @@ This avoids reading any variant more than once.
 '''
 
 from ..utils import get_padded_gene_tuples
+from .. import conf
 from ..file_utils import MatrixReader, get_filepath, get_tmp_path
 from .load_utils import Parallelizer
 
@@ -134,13 +135,14 @@ def get_gene_intervaltree_for_chrom() -> Dict[str,IntervalTree]:
 
 def order_and_truncate_phenos(phenos: List[Dict[str,Any]]) -> List[Dict[str,Any]]:
     # Decide how many phenotypes to show.
-    #  - Always show all significant phenotypes (with pvalue < 5e-8).
+    #  - Always show all significant phenotypes (below the data dir's significance_threshold).
     #  - Always show the three strongest phenotypes (even if none are significant).
     #  - Look at the p-values of the 4th to 10th strongest phenotypes to decide how many of them to show.
     phenos.sort(key=lambda a:a['pval'])
+    significance_threshold = conf.get_significance_threshold()
     biggest_idx_to_include = 2
     for idx in range(biggest_idx_to_include, len(phenos)):
-        if phenos[idx]['pval'] < 5e-8:
+        if phenos[idx]['pval'] < significance_threshold:
             biggest_idx_to_include = idx
         elif idx < 10 and phenos[idx]['pval'] < 10 ** (-4 - idx//2): # formula is arbitrary
             biggest_idx_to_include = idx

@@ -3,7 +3,7 @@ This script creates generated-by-pheweb/best-of-pheno/<pheno> which contains the
 '''
 
 from ..file_utils import VariantFileReader, VariantFileWriter, get_pheno_filepath
-from ..utils import chrom_order
+from ..utils import get_chrom_order
 from .load_utils import MaxPriorityQueue, parallelize_per_pheno, get_phenos_subset, get_phenolist
 
 import argparse
@@ -38,5 +38,6 @@ def make_bestof_file_explicit(in_filepath:str, out_filepath:str) -> None:
         for v in vfr:
             q.add_and_keep_size(v, v['pval'], NUM_VARIANTS)
     assocs = list(q.pop_all())
+    chrom_order = get_chrom_order()
     assocs.sort(key=lambda v: (chrom_order[v['chrom']], v['pos']))
     with VariantFileWriter(out_filepath) as vfw: vfw.write_all(assocs)

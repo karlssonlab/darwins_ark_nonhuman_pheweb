@@ -45,8 +45,8 @@ $(function() { $('.typeahead').focus(); }); // autofocus attribute doesn't work 
     </div>
 </div>
 
-<p style="color:F9F4FF;"> This website was created in order to share the results of GWAS analyses performed against the Dog Aging Project dataset </p>
-<h2 style="color:F9F4FF;">Browse the dog <a href="{{ url_for('.phenotypes_page') }}">Phenotypes</a></h2>
+<p style="color:F9F4FF;"> This website was created in order to share the results of GWAS analyses performed against the {{ config.SPECIES_DISPLAY_NAME }} dataset </p>
+<h2 style="color:F9F4FF;">Browse the {{ config.SPECIES }} <a href="{{ url_for('.phenotypes_page') }}">Phenotypes</a></h2>
 <!--RB remove the search bar
 <div class="row">
     <div class="col-xs-12 col-sm-offset-1 col-sm-10">
