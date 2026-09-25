@@ -1,12 +1,18 @@
+# Darwin's Ark non-human PheWeb
 
-This is a fork of PheWeb for non-human GWAS. It serves both **dog** and **cat** data from one codebase, selected per dataset.
+A fork of [PheWeb](https://github.com/statgen/pheweb) for **non-human GWAS**. It
+serves **dog** and **cat** data from one codebase, selected per dataset.
+
+The live instance built from this repo is the **Darwin's Ark Dog Compulsive
+Disorder PheWeb** (3 factor GWAS + 14 survey items, canFam4).
 
 ## Species support (dog & cat)
 
 Upstream PheWeb is parametrized by human genome build. This fork replaces that
-with a **species profile** (`pheweb/species.py`) selected by a `species` config
-key. Each dataset directory has a `config.py` declaring `species = 'dog'` (the
-default, for backward compatibility) or `species = 'cat'`, which selects:
+with a **species profile** ([`pheweb/species.py`](pheweb/species.py)) selected by
+a `species` config key. Each dataset directory has a `config.py` declaring
+`species = 'dog'` (the default, for backward compatibility) or `species = 'cat'`,
+which selects:
 
 | | dog | cat |
 |---|---|---|
@@ -14,16 +20,17 @@ default, for backward compatibility) or `species = 'cat'`, which selects:
 | assembly | canFam4 | F.catus_Fca126_mat1.0 (GCF_018350175.1) |
 | gene BED | `UU_CFAM_GSD_1.0_rosy.refseq.ensformat.bed` | `cat_genes.bed` |
 | ref FASTAs | `reference-canFam4-chrom-{chrom}.fa` | `reference-F.catus_Fca126_mat1.0-chrom-{chrom}.fa` |
+| recombination map | Kidd fine-scale canFam4 map | none (track omitted) |
 | UCSC browser | `canFam4` | GenArk hub `hub_6476843_GCF_018350175.1` (cytogenetic chrom names mapped server-side) |
 
 **The folder is the dataset.** One installed `pheweb`; many data folders, each
-declaring its own species:
+declaring its own species, branding, and thresholds:
 
 ```
 /data/
-├── dog_dap/       config.py: species='dog'   + pheno-list.json, dog genes.bed, resources/ (canFam4 FASTAs)
-├── cat_study_A/   config.py: species='cat'   + pheno-list.json, cat_genes.bed, resources/ (F.catus FASTAs)
-└── cat_study_B/   config.py: species='cat'   + pheno-list.json (different cat data); may share cat genes/FASTAs
+├── dog_compulsive_disorder_pheweb/  config.py: species='dog' + pheno-list.json, gene BED, recomb map, custom_templates/
+├── cat_study_A/                     config.py: species='cat' + pheno-list.json, cat_genes.bed
+└── cat_study_B/                     config.py: species='cat' + pheno-list.json (may share cat genes/FASTAs)
 ```
 
 Point `pheweb` at a folder via `cd` or the `PHEWEB_DATADIR` env var (a
@@ -62,24 +69,163 @@ dataset:
 ./run_local.sh test                               # pytest, no dataset needed
 ```
 
+The pheweb source is **baked into the image**, so after editing `pheweb/` you
+must re-run `./run_local.sh build` before `serve` picks the change up (only the
+last two layers rebuild — seconds).
+
 Why a container, what it pins and why, and how the dog dataset was built:
 [`docs/local-dog-pheweb-implementation.md`](docs/local-dog-pheweb-implementation.md).
 
-On the cluster, use the native install instead:
-[`run_process_pheweb.sbatch`](run_process_pheweb.sbatch) and
-[`run_serve_pheweb.sh`](run_serve_pheweb.sh), both of which take the data dir as
-their first argument.
+On a cluster, use a native conda install instead — see
+[`docs/unity-reprocess-runbook.md`](docs/unity-reprocess-runbook.md), which is a
+full step-by-step for processing a dataset on an HPC system (including the
+`PYTHONPATH` trap that silently made one run use stale code).
 
-### Cat gene BED
+---
 
-Cat needs a 5-column BED (`chrom start end gene_name ensg`). The RefSeq
-annotation is 4-column, so duplicate the gene name into the 5th column (no GTF
-conversion; `make_bed.sh` stays dog-only):
+# Building a PheWeb for a new non-human dataset
+
+### 1. Install
+
+On a cluster, in a Python 3.8 environment:
 
 ```bash
-awk -v OFS='\t' '{print $1,$2,$3,$4,$4}' \
-    GCF_018350175.1_F.catus_Fca126_mat1.0_genes.bed > cat_genes.bed
+pip install --no-deps -e .     # from a clone of this repo
 ```
+
+On a Mac, skip this and use `./run_local.sh` (above).
+
+### 2. Create the dataset directory and `config.py`
+
+Copy [`example_dog_datadir/`](example_dog_datadir/) or
+[`example_cat_datadir/`](example_cat_datadir/). The keys that matter:
+
+```python
+species = 'dog'                    # selects the species profile; 'cat' also supported
+genes_bed = 'cf4_genes_noLOC.bed'  # overrides the species default (optional)
+significance_threshold = 4e-7      # default is 5e-8 (see below)
+site_title = "Darwin's Ark Dog Compulsive Disorder PheWeb"   # browser title / navbar
+display_name = "Darwin's Ark"      # short label
+num_procs = 8
+```
+
+Anything that differs **between species** belongs in `pheweb/species.py`;
+anything that differs **between studies** (thresholds, branding, phenotype list)
+belongs here.
+
+### 3. Prepare the input files
+
+Three standalone scripts do the preparation. Each needs only Python + pysam, so
+they run fine in the cluster conda env.
+
+**Summary statistics — [`normalize_sumstats.py`](normalize_sumstats.py).**
+PheWeb expects `chrom,pos,ref,alt,pval,beta,sebeta,af`, sorted by chromosome (in
+species order) then position, and it **never checks `ref` against the reference
+genome** — upstream treats that as the user's obligation. GCTA MLMA output gives
+`A1` (the *effect* allele) and `A2`, which is **not** the same as alt/ref:
+assigning `ref=A2, alt=A1` mislabelled 16.2% of variants in an earlier build of
+this site. This script anchors each variant against the reference FASTA and flips
+the sign of `beta` whenever it has to swap the alleles:
+
+```bash
+python normalize_sumstats.py --species dog \
+    UU_Cfam_GSD_1.0_ROSY.fa  CCDF1_sumstats.mlma  data/CCDF1_sumstats.norm.csv.gz
+```
+
+It auto-detects MLMA vs. the ITEM survey format, spools per chromosome so memory
+stays bounded, and emits chromosomes in species order.
+
+**Gene annotation — [`prep_gene_bed.py`](prep_gene_bed.py).** Gene downloads are
+disabled in this fork (upstream fetches a human BED), so the gene BED ships in
+the data dir. `--drop-loc` removes uncharacterized `LOC*` genes so the nearest-gene
+labels name real genes:
+
+```bash
+python prep_gene_bed.py --species dog --drop-loc genes_table.txt cf4_genes_noLOC.bed
+```
+
+Two load steps ignore this file's timestamp. After changing it, delete
+`generated-by-pheweb/best-phenos-by-gene.sqlite3` and
+`generated-by-pheweb/resources/gene_aliases-v*.sqlite3` by hand.
+
+**Recombination map — [`prep_recomb_map.py`](prep_recomb_map.py)** (optional,
+dog only). Converts per-chromosome map files into one bgzipped, tabixed TSV in
+the data dir:
+
+```bash
+python prep_recomb_map.py --species dog kidd_maps/ dog_compulsive_disorder_pheweb/
+```
+
+The region view shows the track only if both the `.gz` and its `.tbi` are
+present; otherwise the right-hand axis is omitted entirely. See
+[`docs/recombination-track.md`](docs/recombination-track.md).
+
+### 4. Make `pheno-list.json`
+
+In the data directory, one object per phenotype:
+
+```json
+[
+    {
+        "assoc_files": ["data/CCDF1_sumstats.norm.csv.gz"],
+        "phenocode": "CCDF1",
+        "phenostring": "Compulsive behaviour factor 1",
+        "category": "Factors",
+        "num_samples": 2414
+    },
+    {
+        "assoc_files": ["data/ITEM145_sumstats.norm.csv.gz"],
+        "phenocode": "item145",
+        "phenostring": "item145: chases tail",
+        "category": "Survey items",
+        "num_samples": 2414
+    }
+]
+```
+
+`assoc_files` and `phenocode` (`[A-Za-z0-9_~-]`) are required. Optional:
+`phenostring` (shown in tables, tooltips, page headers), `category` (groups
+phenotypes in the PheWAS plot), and `num_cases` / `num_controls` /
+`num_samples`. Beware: a GCTA-style `N` column is often an **allele** count (2N),
+not a sample count — check it against the paper rather than importing it blindly.
+
+Verify before spending a cluster job:
+
+```bash
+PHEWEB_DATADIR=/path/to/dataset pheweb phenolist verify
+```
+
+### 5. Process
+
+```bash
+cd /path/to/dataset && pheweb process
+```
+
+The log prints `TRYING` / `Downloading ... rsids-...`. **Nothing is fetched** —
+this fork has the rsID download commented out and writes an empty file in its
+place. (Do not set `disallow_downloads = True`; the permission check runs before
+the no-op and raises.)
+
+To distribute jobs across a cluster, see
+[these instructions](etc/detailed-loading-instructions.md#distributing-jobs-across-a-cluster);
+for a worked HPC example, [`docs/unity-reprocess-runbook.md`](docs/unity-reprocess-runbook.md).
+
+### 6. Serve
+
+```bash
+pheweb serve --open           # or ./run_local.sh serve <data_dir> 8000
+```
+
+### 7. Brand the site
+
+Per-dataset, without touching the code:
+
+- `site_title` / `display_name` in `config.py` — page titles and navbar.
+- `custom_templates/about/content.html` in the data directory — the dataset's
+  own About page (study description, citations, links). Each dataset gets its
+  own; nothing study-specific lives in the repo templates.
+
+`/` redirects to `/phenotypes`; there is no separate landing page.
 
 ### Genome-wide significance threshold
 
@@ -102,14 +248,26 @@ One key moves four things:
 
 The first three are read by the browser at page load, so a server restart is
 enough. The fourth is computed during `pheweb process` and baked into the
-Manhattan JSON, so it keeps the old value until you re-run the load steps. If you
-only care about the line and the labels, no reprocessing is needed.
+Manhattan JSON, so it keeps the old value until you re-run the load steps.
 
 It must be stricter than `manhattan_peak_pval_threshold` (default 1e-6), since
 peaks have to be found before their significant variants can be counted. Setting
 it looser raises a clear error at startup rather than an unexplained assertion
 mid-load. Set `manhattan_peak_variant_counting_pval_threshold` explicitly only if
 you deliberately want the counting threshold to differ from the line.
+
+See [`docs/significance-threshold-implementation.md`](docs/significance-threshold-implementation.md).
+
+### Cat gene BED
+
+Cat needs a 5-column BED (`chrom start end gene_name ensg`). The RefSeq
+annotation is 4-column, so duplicate the gene name into the 5th column (no GTF
+conversion; `make_bed.sh` stays dog-only):
+
+```bash
+awk -v OFS='\t' '{print $1,$2,$3,$4,$4}' \
+    GCF_018350175.1_F.catus_Fca126_mat1.0_genes.bed > cat_genes.bed
+```
 
 ### Out of scope
 
@@ -118,153 +276,108 @@ region view's external human LocusZoom services return nothing useful for dog or
 cat); and cat rsid/dbSNP annotation is stubbed out (as it already is for dog).
 
 The recombination track *is* now local for dog — Jeffrey Kidd's fine-scale
-canFam4 map, built by `prep_recomb_map.py`. Where no species-appropriate
-map is configured (currently cat), the track is omitted rather than falling back
-to the human one. See [docs/recombination-track.md](docs/recombination-track.md).
+canFam4 map, built by `prep_recomb_map.py`. Where no species-appropriate map is
+configured (currently cat), the track is omitted rather than falling back to the
+human one.
 
+The governing rule: **never fall back to human data for a non-human species.** A
+missing track is self-evidently missing; a human track silently mislabelled as
+dog is not.
 
-# How to Cite PheWeb
-This is a slight modification of the original PheWeb which should be cited:
-Gagliano Taliun, S.A., VandeHaar, P. et al. Exploring and visualizing large-scale genetic associations by using PheWeb. *Nat Genet* 52, 550–552 (2020).
+---
+
+# Deploying a dataset as a container
+
+[`docker/Dockerfile.serve`](docker/Dockerfile.serve) builds a self-contained,
+serve-only image: the code plus one processed dataset, with no bind mounts. It
+targets [SciLifeLab Serve](https://serve.scilifelab.se/), whose contract requires
+the startup script to be named exactly `start-script.sh` and be the `ENTRYPOINT`.
+
+```bash
+docker build --platform linux/amd64 \
+  -f docker/Dockerfile.serve \
+  --build-arg DATASET=dog_compulsive_disorder_pheweb \
+  -t <user>/dog-compulsive-disorder-pheweb:<tag> .
+
+# check it locally before pushing (an arm64 Mac needs --platform)
+docker run --rm --platform linux/amd64 -p 8000:8000 \
+  <user>/dog-compulsive-disorder-pheweb:<tag>
+
+docker push <user>/dog-compulsive-disorder-pheweb:<tag>
+```
+
+Notes worth knowing before you build:
+
+- The image carries the dataset's `generated-by-pheweb/` output, so the host
+  needs no data volume — but that makes it multi-GB. Keep
+  [`docker/Dockerfile.serve.dockerignore`](docker/Dockerfile.serve.dockerignore)
+  accurate; a missing `**/` prefix once turned a 250 MB image into 32 GB.
+- `config.py`, `pheno-list.json`, and `custom_templates/` are copied in a **final
+  layer**, after the big data layer, so editing the About page rebuilds in
+  seconds rather than re-copying gigabytes.
+- [`docker/start-script.sh`](docker/start-script.sh) validates `PORT` (3000–9999),
+  requires `PHEWEB_DATADIR`, checks that `pheno-list.json` and
+  `generated-by-pheweb/` are present, and then `exec`s `pheweb serve`.
+- The image is amd64 by design. On an Apple-Silicon Mac, always pass
+  `--platform linux/amd64` or the pull fails with "no matching manifest".
+
+---
+
+# Modifying this fork
+
+```bash
+git clone https://github.com/karlssonlab/darwins_ark_nonhuman_pheweb.git
+cd darwins_ark_nonhuman_pheweb
+python3.8 -m venv .venv && source .venv/bin/activate   # 3.11 does not work
+pip install wheel && pip install -e .
+pip install pytest && python -m pytest
+```
+
+On an Apple-Silicon Mac the native install will not work at all (no arm64 wheels
+for the pinned deps) — use `./run_local.sh test` instead. Two test failures
+(`test_all`, `test_detectref`) are **pre-existing** and download-related.
+
+Read [`CLAUDE.md`](CLAUDE.md) first: it collects the gotchas that have each cost
+real time (stale images, the `/app` mount that breaks the console script,
+`PHEWEB_DATADIR` precedence, the gene-BED caches that never invalidate).
+
+`docs/` holds dated implementation notes for each area — recombination track,
+significance threshold, allele normalization, cat support, branding. Each records
+the decisions *and the rejected alternatives*. Read the relevant one before
+changing that area, and add one when you change something non-obvious.
+
+### Upstream options that still apply
+
+To run pheweb through systemd, see the sample file [here](etc/pheweb.service).
+To use Apache2 or Nginx, see [these instructions](etc/detailed-webserver-instructions.md#using-apache2-or-nginx).
+To require login via OAuth, see [these instructions](etc/detailed-webserver-instructions.md#using-oauth).
+To reduce storage use, see [these instructions](etc/detailed-webserver-instructions.md#reducing-storage-use).
+To customize page contents, see [these instructions](etc/detailed-webserver-instructions.md#customizing-page-contents).
+
+To hide the button for downloading summary stats, add `download_pheno_sumstats = "secret"` and `SECRET_KEY = "your random string"` in `config.py`. That makes a secret page (printed to the console when you start the server) to share summary stats.
+To hide the buttons for downloading top hits and phenotypes, add `download_top_hits = "hide"` and `download_phenotypes = "hide"` respectively.
+
+To allow dynamically filtering the manhattan plot, run `pheweb best-of-pheno` and set `show_manhattan_filter_button = True` in `config.py`.
+
+---
+
+# How to cite
+
+This is a modification of the original PheWeb, which should be cited:
+
+> Gagliano Taliun, S.A., VandeHaar, P. et al. Exploring and visualizing
+> large-scale genetic associations by using PheWeb. *Nat Genet* 52, 550–552 (2020).
 
 The dog recombination track in the region view is not ours; cite it separately if
 you use it:
-Kidd JM. Fine-scale recombination rates inferred using the canFam4 assembly are
-strongly correlated with previous maps of dog recombination. *Mamm Genome*. 2025
-Dec 12;37(1):12. doi:10.1007/s00335-025-10178-0. PMID: 41387639. PMCID: PMC12701031.
 
-# How to Build a PheWeb for DAP data
+> Kidd JM. Fine-scale recombination rates inferred using the canFam4 assembly are
+> strongly correlated with previous maps of dog recombination. *Mamm Genome*.
+> 2025 Dec 12;37(1):12. doi:10.1007/s00335-025-10178-0. PMID: 41387639.
+> PMCID: PMC12701031.
 
-### 1. Install PheWeb
+The 4e-7 threshold used by the dog instance comes from:
 
-```bash
-pip3 install pheweb
-```
-If on ASU SOL cluster then read the "sol_install_notes.txt"
-
-### 2. Create a directory and `config.py` for your new dataset
-Create a folder for the dataset and put a `config.py` in it declaring the
-species, e.g. `species = 'dog'` (the default) or `species = 'cat'`. That key
-selects the species profile (chromosomes, assembly, gene BED, reference FASTAs,
-UCSC link, branding) — see the "Species support" section above. `pheweb` reads
-this folder via `cd` into it or via `PHEWEB_DATADIR=/path/to/folder`.
-
-### 3. Convert MLMA files into csv files
-There are multiple options, but PheWeb expects files to look like:
-
-    chrom,pos,ref,alt,pval
-    1,629,C,T,0.0856026
-    1,2076,G,T,0.835506
-    1,2388,C,T,0.0574887
-
-This conversion was done with a simple python script `mlma_to_csv.py`
-and the files were stored in the `mlmas/` subdir.
-
-### 4. Make a list of your phenotypes
-
-Inside of your data directory, you need a file named `pheno-list.json` that looks like this:
-
-```json
-[
-    {
-        "assoc_files": [
-            "mlmas/DogAgingProject_gp-0.70_biallelic-snps_N-6358_maf-0.01_geno-0.05_hwe-1.0E-20-midp-keep-fewhet_phe-dd_weight_lbs_N-6279_cov-dd_sex_N-6279_qcov-Estimated_Age_Years_at_HLES_N-6279_chr1.loco.csv"
-        ],
-        "phenocode": "Weight",
-        "category": "Physical"
-    },
-    {
-        "assoc_files": [
-            "mlmas/DogAgingProject_gp-0.70_biallelic-snps_N-6358_maf-0.01_geno-0.05_hwe-1.0E-20-midp-keep-fewhet_phe-pa_activity_level_N-6279_cov-dd_sex_N-6279_qcov-Estimated_Age_Years_at_HLES-dd_weight_lbs_N-6279_chr1.loco.csv"
-        ],
-        "phenocode": "Activity level",
-        "category": "Activity"
-    },
-    {
-        "assoc_files": [
-            "mlmas/DogAgingProject_gp-0.70_biallelic-snps_N-6358_maf-0.01_mp_dental_extraction_N-1524_cov-dd_sex_N-6279_Estimated_Age_Years_at_HLES-dd_weight_lbs_N-6279_chr1.loco.csv"
-        ],
-        "phenocode": "Dental extraction",
-        "category": "Dental"
-    }
-]
-```
-
-Each phenotype needs `assoc_files` (a list of paths to association files) and `phenocode` (a string representing your phenotype that is used in filenames and URLs, comprised of `[A-Za-z0-9_~-]`).
-
-If you want, you can also include:
-
-- `phenostring` (string): a name for the phenotype. Shown in tables and tooltips and page headers.
-- `category` (string): groups together phenotypes in the PheWAS plot. Shown in tables and tooltips.
-- `num_cases`, `num_controls`, and/or `num_samples` (number): if your input data only has `AC` or `MAC`, this will be used to calculated `AF` or `MAF`.  Shown in tooltips.  If your input data has correctly-named columns for these, the command `pheweb phenolist read-info-from-association-files` will add them into your existing `pheno-list.json`.
-- anything else you want, but you'll have to modify templates to use it.
-
-### 5. Load your association files
-
-Run `pheweb process`.
-
-To distribute jobs across a cluster, follow [these instructions](etc/detailed-loading-instructions.md#distributing-jobs-across-a-cluster).
-
-To include VEP annotations, follow [these instructions](etc/detailed-loading-instructions.md#annotating-with-vep).
-
-If something breaks and you can't understand the error message or it's something that PheWeb should support by default, [open an issue on github](https://github.com/statgen/pheweb/issues/new) or email me.
-
-### 6. Serve the website
-
-Run `pheweb serve --open`.
-
-That command should either open a browser to your new PheWeb, or it should give you a URL that you can open in your browser to access your new PheWeb.
-If it doesn't, follow [the directions for hosting a PheWeb and accessing it from your browser](etc/detailed-webserver-instructions.md#hosting-a-pheweb-and-accessing-it-from-your-browser).
-
-### More options:
-
-To run pheweb through systemd, see sample file [here](etc/pheweb.service).
-To use Apache2 or Nginx, see instructions [here](etc/detailed-webserver-instructions.md#using-apache2-or-nginx).
-To require login via OAuth, see instructions [here](etc/detailed-webserver-instructions.md#using-oauth).
-To track page views with Google Analytics, see instructions [here](etc/detailed-webserver-instructions.md#using-google-analytics).
-To reduce storage use, see instructions [here](etc/detailed-webserver-instructions.md#reducing-storage-use).
-To customize page contents, see instructions [here](etc/detailed-webserver-instructions.md#customizing-page-contents).
-
-PheWeb can display phenotype correlations generated by [another tool](https://github.com/statgen/pheweb-rg-pipeline).
-To use this feature, set `show_correlations = True`  in `config.py` and place the output of the rg pipeline as `pheno-correlations.txt` in the same folder as `pheno-list.json`.
-
-To hide the button for downloading summary stats, add `download_pheno_sumstats = "secret"` and `SECRET_KEY = "your random string"` in `config.py`.  That will make a secret page (printed to the console when you start the server) to share summary stats.
-To hide the button for downloading top hits and phenotypes, add `download_top_hits = "hide"` and `download_phenotypes = "hide"` respectively.
-
-To allow dynamically filtering the manhattan plot, run `pheweb best-of-pheno` and set `show_manhattan_filter_button=True` in `config.py`.
-
-# Modifying DAP PheWeb
-
-Here are the steps I took to get a development installation of PheWeb running on my mac laptop:
-
-1. Clone the DAP PheWeb repo
-
-* `git clone https://github.com/karlssonlab/darwins_ark_nonhuman_pheweb.git`
-
-2. cd into the repo and create a virtual environment. I used python 3.8 after I had some trouble with 3.11
-
-* `cd DAP_pheweb`
-
-* `python3.8 -m venv .venv`
-
-* `source .venv/bin/activate`
-
-3. Install wheel and then pheweb as editable
-
-* `pip install wheel`
-
-* `pip install -e .`
-
-4. Check that pheweb is installed
-
-* `which pheweb`
-
-5. Run the included tests, hopefully they should all pass
-
-* `pip install pytest`
-
-* `python -m pytest`
-
-6. Do a test run of the server. Run the following command, and while that is running, open a browser window and go to http://0.0.0.0:8000/ and there should be a small pheweb example application running.
-
-* `./tests/run-all.sh`
+> Pettersson ME, Tengvall K, Meadows JRS. Towards a Standard Threshold for
+> Genome Wide Significance in Dogs. *Animal Genetics*. 2026;57(5).
+> doi:10.1002/age.70208.
