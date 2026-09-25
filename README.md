@@ -73,13 +73,16 @@ The pheweb source is **baked into the image**, so after editing `pheweb/` you
 must re-run `./run_local.sh build` before `serve` picks the change up (only the
 last two layers rebuild — seconds).
 
-Why a container, what it pins and why, and how the dog dataset was built:
-[`docs/local-dog-pheweb-implementation.md`](docs/local-dog-pheweb-implementation.md).
+On a cluster, use a native conda install instead (see "Building a PheWeb for a
+new non-human dataset" below). One trap worth knowing there: `pip install -e .`
+records the path of the directory it was run in *inside the environment*, so
+unpacking the code somewhere new does not change which copy gets imported, and a
+console script does not put the working directory on `sys.path`. Export
+`PYTHONPATH=/path/to/repo` and check it:
 
-On a cluster, use a native conda install instead — see
-[`docs/unity-reprocess-runbook.md`](docs/unity-reprocess-runbook.md), which is a
-full step-by-step for processing a dataset on an HPC system (including the
-`PYTHONPATH` trap that silently made one run use stale code).
+```bash
+python -c "import pheweb, os; print(os.path.dirname(pheweb.__file__))"
+```
 
 ---
 
@@ -157,8 +160,8 @@ python prep_recomb_map.py --species dog kidd_maps/ dog_compulsive_disorder_phewe
 ```
 
 The region view shows the track only if both the `.gz` and its `.tbi` are
-present; otherwise the right-hand axis is omitted entirely. See
-[`docs/recombination-track.md`](docs/recombination-track.md).
+present; otherwise the right-hand axis is omitted entirely. The map file to use
+for a species is named in `pheweb/species.py` (`recomb_map`).
 
 ### 4. Make `pheno-list.json`
 
@@ -207,8 +210,9 @@ place. (Do not set `disallow_downloads = True`; the permission check runs before
 the no-op and raises.)
 
 To distribute jobs across a cluster, see
-[these instructions](etc/detailed-loading-instructions.md#distributing-jobs-across-a-cluster);
-for a worked HPC example, [`docs/unity-reprocess-runbook.md`](docs/unity-reprocess-runbook.md).
+[these instructions](etc/detailed-loading-instructions.md#distributing-jobs-across-a-cluster).
+`run_process_pheweb_unity.sbatch` is a working Slurm example; set `num_procs` in
+`config.py` to match the CPUs you request.
 
 ### 6. Serve
 
@@ -255,8 +259,6 @@ peaks have to be found before their significant variants can be counted. Setting
 it looser raises a clear error at startup rather than an unexplained assertion
 mid-load. Set `manhattan_peak_variant_counting_pval_threshold` explicitly only if
 you deliberately want the counting threshold to differ from the line.
-
-See [`docs/significance-threshold-implementation.md`](docs/significance-threshold-implementation.md).
 
 ### Cat gene BED
 
@@ -340,11 +342,6 @@ for the pinned deps) — use `./run_local.sh test` instead. Two test failures
 Read [`CLAUDE.md`](CLAUDE.md) first: it collects the gotchas that have each cost
 real time (stale images, the `/app` mount that breaks the console script,
 `PHEWEB_DATADIR` precedence, the gene-BED caches that never invalidate).
-
-`docs/` holds dated implementation notes for each area — recombination track,
-significance threshold, allele normalization, cat support, branding. Each records
-the decisions *and the rejected alternatives*. Read the relevant one before
-changing that area, and add one when you change something non-obvious.
 
 ### Upstream options that still apply
 
